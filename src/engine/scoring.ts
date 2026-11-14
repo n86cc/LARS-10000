@@ -1,4 +1,4 @@
-import type { DieValue, ScoringEvaluation } from '../types/game';
+import type { DieValue, ScoringEvaluation } from '../types/game.ts';
 
 const ALL_FACES: DieValue[] = [1, 2, 3, 4, 5, 6];
 

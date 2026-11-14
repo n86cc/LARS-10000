@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Award,
   BookOpen,
@@ -7,6 +7,7 @@ import {
   Play,
   Plus,
   RotateCcw,
+  Smartphone,
   Sun,
   Trash2,
   Users,
@@ -28,11 +29,17 @@ interface TitleScreenProps {
   theme: ThemeMode;
   isMuted: boolean;
   historyCount: number;
+  initialPlayerName: string;
+  initialRoomCode?: string;
+  onlineError?: string | null;
+  isSocketConnected: boolean;
   onToggleTheme: () => void;
   onToggleMute: () => void;
   onResumeGame: () => void;
   onDiscardSavedGame: () => void;
   onStartNewGame: (config: StartGameConfig) => void;
+  onCreateOnlineRoom: (playerName: string) => void;
+  onJoinOnlineRoom: (roomCode: string, playerName: string) => void;
   onOpenRules: () => void;
   onOpenHighscores: () => void;
   onOpenHistory: () => void;
@@ -45,24 +52,41 @@ export function TitleScreen({
   theme,
   isMuted,
   historyCount,
+  initialPlayerName,
+  initialRoomCode = '',
+  onlineError,
+  isSocketConnected,
   onToggleTheme,
   onToggleMute,
   onResumeGame,
   onDiscardSavedGame,
   onStartNewGame,
+  onCreateOnlineRoom,
+  onJoinOnlineRoom,
   onOpenRules,
   onOpenHighscores,
   onOpenHistory,
 }: TitleScreenProps) {
-  const [mode, setMode] = useState<GameMode>('vs_lars');
+  const [mode, setMode] = useState<GameMode>(
+    initialRoomCode ? 'online_multiplayer' : 'vs_lars'
+  );
   const [aiDifficulty, setAiDifficulty] = useState<AIDifficulty>('taktisk');
-  const [soloPlayerName, setSoloPlayerName] = useState('Dig');
+  const [soloPlayerName, setSoloPlayerName] = useState(initialPlayerName || 'Dig');
+  const [onlineName, setOnlineName] = useState(initialPlayerName || '');
+  const [joinCode, setJoinCode] = useState(initialRoomCode);
   const [larsGoesFirst, setLarsGoesFirst] = useState(false);
 
   const [mpPlayers, setMpPlayers] = useState<Array<{ name: string; type: 'human' | 'ai'; isLars?: boolean }>>([
     { name: 'Spiller 1', type: 'human' },
     { name: 'Spiller 2', type: 'human' },
   ]);
+
+  useEffect(() => {
+    if (initialRoomCode) {
+      setMode('online_multiplayer');
+      setJoinCode(initialRoomCode);
+    }
+  }, [initialRoomCode]);
 
   const handleAddPlayer = () => {
     if (mpPlayers.length >= 4) return;
@@ -279,30 +303,42 @@ export function TitleScreen({
             className="p-6 rounded-2xl bg-white/95 dark:bg-[#0d2749]/95 border border-slate-200/90 dark:border-sky-800/60 shadow-xl space-y-5"
           >
             {/* Mode Segmented Selector */}
-            <div className="grid grid-cols-2 gap-1.5 p-1 rounded-xl bg-slate-100 dark:bg-[#081b34]">
+            <div className="grid grid-cols-3 gap-1 p-1 rounded-xl bg-slate-100 dark:bg-[#081b34]">
               <button
                 type="button"
                 onClick={() => setMode('vs_lars')}
-                className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg text-xs sm:text-sm font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                className={`flex items-center justify-center gap-1.5 py-2.5 px-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
                   mode === 'vs_lars'
                     ? 'bg-white dark:bg-[#163d70] text-slate-900 dark:text-white shadow-xs'
                     : 'text-slate-600 dark:text-sky-200/70 hover:text-slate-900 dark:hover:text-white'
                 }`}
               >
-                <Bot className="w-4 h-4 text-sky-500" />
-                Spil mod Lars
+                <Bot className="w-3.5 h-3.5 text-sky-500 shrink-0" />
+                <span>Mod Lars</span>
               </button>
               <button
                 type="button"
                 onClick={() => setMode('local_multiplayer')}
-                className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg text-xs sm:text-sm font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                className={`flex items-center justify-center gap-1.5 py-2.5 px-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
                   mode === 'local_multiplayer'
                     ? 'bg-white dark:bg-[#163d70] text-slate-900 dark:text-white shadow-xs'
                     : 'text-slate-600 dark:text-sky-200/70 hover:text-slate-900 dark:hover:text-white'
                 }`}
               >
-                <Users className="w-4 h-4 text-amber-500" />
-                Lokal Multiplayer
+                <Users className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                <span>Samme skærm</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode('online_multiplayer')}
+                className={`flex items-center justify-center gap-1.5 py-2.5 px-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                  mode === 'online_multiplayer'
+                    ? 'bg-white dark:bg-[#163d70] text-slate-900 dark:text-white shadow-xs'
+                    : 'text-slate-600 dark:text-sky-200/70 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                <Smartphone className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                <span>Telefoner</span>
               </button>
             </div>
 
@@ -369,81 +405,169 @@ export function TitleScreen({
                     Byt rækkefølge
                   </button>
                 </div>
+
+                <button
+                  type="submit"
+                  className="w-full flex items-center justify-center gap-2.5 py-3.5 px-6 rounded-xl font-display font-bold text-base bg-amber-500 hover:bg-amber-400 active:scale-[0.99] text-slate-950 shadow-lg shadow-amber-500/20 transition-all cursor-pointer"
+                >
+                  <Play className="w-5 h-5 fill-current" />
+                  Start spil
+                </button>
               </div>
-            ) : (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-slate-600 dark:text-sky-100/80">
-                    Spillere ({mpPlayers.length}/4) · Turrækkefølge
-                  </span>
-                  <div className="flex items-center gap-2">
-                    {mpPlayers.length < 4 && (
+            ) : mode === 'local_multiplayer' ? (
+              <div className="space-y-4">
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-slate-600 dark:text-sky-100/80">
+                      Spillere ({mpPlayers.length}/4) · Samme enhed
+                    </span>
+                    <div className="flex items-center gap-2">
+                      {mpPlayers.length < 4 && (
+                        <button
+                          type="button"
+                          onClick={handleAddPlayer}
+                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-[#13335e] dark:hover:bg-[#194378] text-slate-700 dark:text-sky-100 transition-colors cursor-pointer"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          Tilføj ven
+                        </button>
+                      )}
                       <button
                         type="button"
-                        onClick={handleAddPlayer}
-                        className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-[#13335e] dark:hover:bg-[#194378] text-slate-700 dark:text-sky-100 transition-colors cursor-pointer"
+                        onClick={handleToggleLarsInMp}
+                        disabled={!hasLarsInMp && mpPlayers.length >= 4}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors cursor-pointer disabled:opacity-40 ${
+                          hasLarsInMp
+                            ? 'bg-sky-500/20 text-sky-700 dark:text-sky-300'
+                            : 'bg-slate-100 hover:bg-slate-200 dark:bg-[#13335e] dark:hover:bg-[#194378] text-slate-700 dark:text-sky-100'
+                        }`}
                       >
-                        <Plus className="w-3.5 h-3.5" />
-                        Tilføj ven
+                        {hasLarsInMp ? 'Fjern Lars' : '+ Tilføj Lars'}
                       </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={handleToggleLarsInMp}
-                      disabled={!hasLarsInMp && mpPlayers.length >= 4}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors cursor-pointer disabled:opacity-40 ${
-                        hasLarsInMp
-                          ? 'bg-sky-500/20 text-sky-700 dark:text-sky-300'
-                          : 'bg-slate-100 hover:bg-slate-200 dark:bg-[#13335e] dark:hover:bg-[#194378] text-slate-700 dark:text-sky-100'
-                      }`}
-                    >
-                      {hasLarsInMp ? 'Fjern Lars' : '+ Tilføj Lars (AI)'}
-                    </button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    {mpPlayers.map((p, idx) => (
+                      <div key={idx} className="flex items-center gap-2">
+                        <span className="font-mono text-xs text-slate-400 w-4">{idx + 1}.</span>
+                        {p.isLars ? (
+                          <div className="flex-1 flex items-center gap-2 px-3 py-2 rounded-xl bg-sky-500/10 border border-sky-500/30 text-sm font-semibold text-sky-800 dark:text-sky-200">
+                            <LarsAvatar sizeClass="w-6 h-6" />
+                            <span>Lars (AI · {aiDifficulty})</span>
+                          </div>
+                        ) : (
+                          <input
+                            type="text"
+                            maxLength={18}
+                            value={p.name}
+                            onChange={(e) => handleNameChange(idx, e.target.value)}
+                            placeholder={`Spiller ${idx + 1}`}
+                            className="flex-1 px-3 py-2 rounded-xl text-sm font-medium bg-slate-50 dark:bg-[#081b34] border border-slate-200 dark:border-sky-800/70 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-400"
+                          />
+                        )}
+                        {mpPlayers.length > 2 && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemovePlayer(idx)}
+                            aria-label={`Fjern ${p.name}`}
+                            className="w-9 h-9 rounded-xl flex items-center justify-center text-slate-400 hover:text-rose-500 hover:bg-slate-100 dark:hover:bg-sky-900/40 transition-colors cursor-pointer"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 </div>
 
-                <div className="space-y-2">
-                  {mpPlayers.map((p, idx) => (
-                    <div key={idx} className="flex items-center gap-2">
-                      <span className="font-mono text-xs text-slate-400 w-4">{idx + 1}.</span>
-                      {p.isLars ? (
-                        <div className="flex-1 flex items-center gap-2 px-3 py-2 rounded-xl bg-sky-500/10 border border-sky-500/30 text-sm font-semibold text-sky-800 dark:text-sky-200">
-                          <LarsAvatar sizeClass="w-6 h-6" />
-                          <span>Lars (AI · {aiDifficulty})</span>
-                        </div>
-                      ) : (
-                        <input
-                          type="text"
-                          maxLength={18}
-                          value={p.name}
-                          onChange={(e) => handleNameChange(idx, e.target.value)}
-                          placeholder={`Spiller ${idx + 1}`}
-                          className="flex-1 px-3 py-2 rounded-xl text-sm font-medium bg-slate-50 dark:bg-[#081b34] border border-slate-200 dark:border-sky-800/70 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-400"
-                        />
-                      )}
-                      {mpPlayers.length > 2 && (
-                        <button
-                          type="button"
-                          onClick={() => handleRemovePlayer(idx)}
-                          aria-label={`Fjern ${p.name}`}
-                          className="w-9 h-9 rounded-xl flex items-center justify-center text-slate-400 hover:text-rose-500 hover:bg-slate-100 dark:hover:bg-sky-900/40 transition-colors cursor-pointer"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
-                  ))}
+                <button
+                  type="submit"
+                  className="w-full flex items-center justify-center gap-2.5 py-3.5 px-6 rounded-xl font-display font-bold text-base bg-amber-500 hover:bg-amber-400 active:scale-[0.99] text-slate-950 shadow-lg shadow-amber-500/20 transition-all cursor-pointer"
+                >
+                  <Play className="w-5 h-5 fill-current" />
+                  Start spil
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div>
+                  <label
+                    htmlFor="online-player-name"
+                    className="block text-xs font-semibold text-slate-600 dark:text-sky-100/80 mb-1.5"
+                  >
+                    Dit spillernavn (på denne telefon)
+                  </label>
+                  <input
+                    id="online-player-name"
+                    type="text"
+                    maxLength={18}
+                    value={onlineName}
+                    onChange={(e) => setOnlineName(e.target.value)}
+                    placeholder="F.eks. Mikkel eller Mette"
+                    className="w-full px-3.5 py-2.5 rounded-xl text-sm font-medium bg-slate-50 dark:bg-[#081b34] border border-slate-200 dark:border-sky-800/70 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-400"
+                  />
                 </div>
+
+                {onlineError && (
+                  <div className="px-3.5 py-2.5 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-700 dark:text-rose-300 text-xs font-medium">
+                    {onlineError}
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  disabled={!isSocketConnected}
+                  onClick={() =>
+                    onCreateOnlineRoom(onlineName.trim() || 'Spiller 1')
+                  }
+                  className="w-full flex items-center justify-center gap-2.5 py-3.5 px-6 rounded-xl font-display font-bold text-base bg-amber-500 hover:bg-amber-400 active:scale-[0.99] text-slate-950 shadow-lg shadow-amber-500/20 transition-all cursor-pointer disabled:opacity-40"
+                >
+                  <Plus className="w-5 h-5" />
+                  Opret nyt spillerum
+                </button>
+
+                <div className="relative flex items-center py-1">
+                  <div className="flex-grow border-t border-slate-200 dark:border-sky-800/60" />
+                  <span className="px-3 text-xs font-medium text-slate-400 dark:text-sky-200/60">
+                    eller deltag med rumkode
+                  </span>
+                  <div className="flex-grow border-t border-slate-200 dark:border-sky-800/60" />
+                </div>
+
+                <div className="flex items-stretch gap-2">
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={6}
+                    value={joinCode}
+                    onChange={(e) => setJoinCode(e.target.value.replace(/\D/g, ''))}
+                    placeholder="Rumkode (f.eks. 4829)"
+                    aria-label="Indtast rumkode"
+                    className="flex-1 px-3.5 py-2.5 rounded-xl text-sm font-mono font-bold tracking-widest bg-slate-50 dark:bg-[#081b34] border border-slate-200 dark:border-sky-800/70 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sky-400"
+                  />
+                  <button
+                    type="button"
+                    disabled={!isSocketConnected || joinCode.trim().length < 4}
+                    onClick={() =>
+                      onJoinOnlineRoom(
+                        joinCode.trim(),
+                        onlineName.trim() || 'Spiller 2'
+                      )
+                    }
+                    className="px-5 py-2.5 rounded-xl font-display font-bold text-sm bg-sky-500 hover:bg-sky-400 text-slate-950 transition-colors cursor-pointer disabled:opacity-40 whitespace-nowrap"
+                  >
+                    Deltag
+                  </button>
+                </div>
+
+                {!isSocketConnected && (
+                  <p className="text-[11px] text-center text-amber-600 dark:text-amber-300">
+                    Forbinder til spilserveren...
+                  </p>
+                )}
               </div>
             )}
-
-            <button
-              type="submit"
-              className="w-full flex items-center justify-center gap-2.5 py-3.5 px-6 rounded-xl font-display font-bold text-base bg-amber-500 hover:bg-amber-400 active:scale-[0.99] text-slate-950 shadow-lg shadow-amber-500/20 transition-all cursor-pointer"
-            >
-              <Play className="w-5 h-5 fill-current" />
-              Start spil
-            </button>
           </form>
         </div>
       </main>

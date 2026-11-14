@@ -10,7 +10,62 @@ const KEYS = {
   MUTED: 'lars10000_muted',
   ACTIVE_GAME: 'lars10000_active_game_v1',
   HISTORY: 'lars10000_history_v1',
+  CLIENT_ID: 'lars10000_client_id_v1',
+  PLAYER_NAME: 'lars10000_player_name_v1',
+  ONLINE_ROOM: 'lars10000_online_room_v1',
 };
+
+export function getOrCreateClientId(): string {
+  try {
+    const existing = localStorage.getItem(KEYS.CLIENT_ID);
+    if (existing) return existing;
+    const created = `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
+    localStorage.setItem(KEYS.CLIENT_ID, created);
+    return created;
+  } catch {
+    return `c-${Math.random().toString(36).slice(2, 10)}`;
+  }
+}
+
+export function loadSavedPlayerName(): string {
+  try {
+    return localStorage.getItem(KEYS.PLAYER_NAME) || '';
+  } catch {
+    return '';
+  }
+}
+
+export function savePlayerName(name: string): void {
+  try {
+    localStorage.setItem(KEYS.PLAYER_NAME, name);
+  } catch {
+    // ignore
+  }
+}
+
+export function loadSavedOnlineRoom(): { roomCode: string; playerName: string } | null {
+  try {
+    const raw = localStorage.getItem(KEYS.ONLINE_ROOM);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { roomCode?: string; playerName?: string };
+    if (!parsed.roomCode) return null;
+    return { roomCode: parsed.roomCode, playerName: parsed.playerName || 'Spiller' };
+  } catch {
+    return null;
+  }
+}
+
+export function saveOnlineRoom(session: { roomCode: string; playerName: string } | null): void {
+  try {
+    if (!session) {
+      localStorage.removeItem(KEYS.ONLINE_ROOM);
+    } else {
+      localStorage.setItem(KEYS.ONLINE_ROOM, JSON.stringify(session));
+    }
+  } catch {
+    // ignore
+  }
+}
 
 export function loadTheme(): ThemeMode {
   try {

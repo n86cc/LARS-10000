@@ -27,6 +27,8 @@ interface GameBoardProps {
   game: GameState;
   theme: ThemeMode;
   isMuted: boolean;
+  localClientId?: string;
+  isSocketConnected?: boolean;
   onToggleTheme: () => void;
   onToggleMute: () => void;
   onExitToTitle: () => void;
@@ -43,6 +45,8 @@ export function GameBoard({
   game,
   theme,
   isMuted,
+  localClientId,
+  isSocketConnected = true,
   onToggleTheme,
   onToggleMute,
   onExitToTitle,
@@ -56,7 +60,10 @@ export function GameBoard({
 }: GameBoardProps) {
   const { players, turn, finalRoundTriggered } = game;
   const activePlayer = players[turn.playerIndex];
-  const isHumanTurn = activePlayer.type === 'human';
+  const isOnline = game.mode === 'online_multiplayer';
+  const isHumanTurn =
+    activePlayer.type === 'human' &&
+    (!isOnline || activePlayer.clientId === localClientId);
   const minRequired = activePlayer.isOnBoard ? 350 : 1000;
 
   const availableDice = useMemo(
@@ -149,15 +156,23 @@ export function GameBoard({
         <button
           type="button"
           onClick={onExitToTitle}
-          aria-label="Tilbage til startskærm"
+          aria-label={isOnline ? 'Forlad rum' : 'Tilbage til startskærm'}
           className="flex items-center gap-2 px-3 py-2 rounded-xl bg-white/85 dark:bg-[#0d2749]/90 hover:bg-white dark:hover:bg-[#143763] text-slate-800 dark:text-white border border-slate-200/80 dark:border-sky-700/50 shadow-xs text-xs font-semibold transition-colors cursor-pointer shrink-0"
         >
           <ArrowLeft className="w-4 h-4" />
-          <span className="hidden sm:inline">Menu</span>
+          <span className="hidden sm:inline">{isOnline ? 'Forlad' : 'Menu'}</span>
         </button>
 
         <div className="flex items-center gap-2 text-xs sm:text-sm font-semibold text-slate-700 dark:text-sky-100">
           <span className="font-display font-bold tracking-tight">LARS:10000</span>
+          {isOnline && game.roomCode && (
+            <>
+              <span aria-hidden="true" className="text-slate-400 dark:text-sky-400/50">·</span>
+              <span className="font-mono tabular-nums text-sky-600 dark:text-sky-300">
+                Rum {game.roomCode}
+              </span>
+            </>
+          )}
           <span aria-hidden="true" className="text-slate-400 dark:text-sky-400/50">·</span>
           <span className="font-mono tabular-nums">Runde {turn.roundNumber}</span>
           {finalRoundTriggered && (
@@ -165,6 +180,14 @@ export function GameBoard({
               <span aria-hidden="true" className="text-slate-400 dark:text-sky-400/50">·</span>
               <span className="text-amber-600 dark:text-amber-400 font-bold">
                 Sidste runde
+              </span>
+            </>
+          )}
+          {isOnline && !isSocketConnected && (
+            <>
+              <span aria-hidden="true" className="text-slate-400 dark:text-sky-400/50">·</span>
+              <span className="text-rose-600 dark:text-rose-400 font-semibold">
+                Genopretter...
               </span>
             </>
           )}
@@ -454,6 +477,7 @@ export function GameBoard({
           <div className="space-y-2.5">
             {players.map((p, idx) => {
               const isCurrent = idx === turn.playerIndex;
+              const isMe = isOnline && p.clientId === localClientId;
               return (
                 <div
                   key={p.id}
@@ -474,10 +498,16 @@ export function GameBoard({
                     <div className="min-w-0">
                       <p className="font-display font-bold text-sm text-slate-900 dark:text-white truncate">
                         {p.name}
+                        {isMe && (
+                          <span className="ml-1.5 text-xs font-medium text-amber-600 dark:text-amber-400">
+                            (Dig)
+                          </span>
+                        )}
                       </p>
                       <p className="text-[11px] text-slate-500 dark:text-sky-200/70">
                         {p.isOnBoard ? 'På tavlen' : 'Ikke på tavlen'}
                         {p.consecutiveZeros > 0 ? ` · ${p.consecutiveZeros}/3 nul` : ''}
+                        {isOnline && p.type === 'human' && p.connected === false ? ' · Afbrudt' : ''}
                       </p>
                     </div>
                   </div>
@@ -533,7 +563,9 @@ export function GameBoard({
             <p className="text-[11px] text-center text-slate-500 dark:text-sky-200/65">
               {isHumanTurn
                 ? 'Mellemrum: Kast · Enter: Gem point'
-                : `${activePlayer.name} tænker...`}
+                : activePlayer.type === 'ai'
+                  ? `${activePlayer.name} tænker...`
+                  : `Venter på ${activePlayer.name}...`}
             </p>
           </div>
         </section>

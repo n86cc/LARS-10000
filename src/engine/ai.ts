@@ -1,5 +1,5 @@
-import type { AIDifficulty, DieValue, Player, ScoringEvaluation } from '../types/game';
-import { findAllValidScoringSubsets } from './scoring';
+import type { AIDifficulty, DieValue, Player, ScoringEvaluation } from '../types/game.ts';
+import { findAllValidScoringSubsets } from './scoring.ts';
 
 export interface AIDecision {
   diceIdsToLock: number[];

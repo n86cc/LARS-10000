@@ -1,165 +1,114 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
+  AIDifficulty,
   CompletedGameRecord,
-  DieState,
-  DieValue,
   GamePhase,
   GameState,
-  LockedBatch,
-  Player,
+  OnlineRoomSnapshot,
+  SoundCue,
   ThemeMode,
-  TurnState,
 } from './types/game';
 import {
-  evaluateSelection,
-  findBestScoringSubset,
-  getScoringDieIds,
-  rollDieValue,
-} from './engine/scoring';
+  createGameFromPlayers,
+  performBank,
+  performLockSelected,
+  performRoll,
+  performSelectBest,
+  performToggleDie,
+  performZeroTurn,
+} from './engine/gameTransitions';
 import { decideAIMove } from './engine/ai';
 import { soundEngine } from './audio/soundEngine';
 import {
   appendGameHistory,
   clearGameHistory,
+  getOrCreateClientId,
   loadActiveGame,
   loadGameHistory,
   loadMuted,
+  loadSavedOnlineRoom,
+  loadSavedPlayerName,
   loadTheme,
   saveActiveGame,
   saveMuted,
+  saveOnlineRoom,
+  savePlayerName,
   saveTheme,
 } from './storage/persistence';
 import { TitleScreen, type StartGameConfig } from './components/TitleScreen';
+import { OnlineLobby } from './components/OnlineLobby';
 import { GameBoard } from './components/GameBoard';
 import { RulesModal } from './components/RulesModal';
 import { HighscoreModal } from './components/HighscoreModal';
 import { VictoryModal } from './components/VictoryModal';
 
-const AVATAR_COLORS = ['#0284c7', '#d97706', '#059669', '#7c3aed'];
-
-function createInitialDice(status: DieState['status'] = 'ready'): DieState[] {
-  return Array.from({ length: 6 }, (_, i) => ({
-    id: i,
-    value: ((i % 6) + 1) as DieValue,
-    status,
-    rollNonce: 0,
-  }));
+function playSoundCue(cue: SoundCue | null | undefined) {
+  if (!cue) return;
+  switch (cue) {
+    case 'roll':
+      soundEngine.playRoll();
+      break;
+    case 'select':
+      soundEngine.playSelect(true);
+      break;
+    case 'deselect':
+      soundEngine.playSelect(false);
+      break;
+    case 'lock':
+      soundEngine.playLock(false);
+      break;
+    case 'doubling':
+      soundEngine.playLock(true);
+      break;
+    case 'bank':
+      soundEngine.playBank();
+      break;
+    case 'farkle':
+      soundEngine.playFarkle();
+      break;
+    case 'victory':
+      soundEngine.playVictory();
+      break;
+  }
 }
 
-function createFreshTurn(
-  playerIndex: number,
-  roundNumber: number,
-  playerName: string,
-  customNotice?: string
-): TurnState {
+function toCompletedRecord(game: GameState): CompletedGameRecord {
+  const sorted = [...game.players].sort((a, b) => b.totalScore - a.totalScore);
+  const winner =
+    game.winnerIndex !== null && game.players[game.winnerIndex]
+      ? game.players[game.winnerIndex]
+      : sorted[0];
+
   return {
-    playerIndex,
-    roundNumber,
-    rollCountInTurn: 0,
-    isFirstRollOfTurn: true,
-    turnScore: 0,
-    dice: createInitialDice('ready'),
-    lockedCycleTriples: {},
-    cycleLockedBatches: [],
-    allTurnBatches: [],
-    subPhase: 'AWAITING_ROLL',
-    statusMessage:
-      customNotice ?? `${playerName}s tur — kast de 6 terninger for at starte`,
+    id: game.id,
+    finishedAt: game.updatedAt,
+    mode: game.mode,
+    aiDifficulty:
+      game.mode === 'vs_lars' || game.mode === 'online_multiplayer'
+        ? game.aiDifficulty
+        : undefined,
+    totalRounds: game.turn.roundNumber,
+    winnerName: winner.name,
+    winnerScore: winner.totalScore,
+    players: game.players.map((p) => ({
+      name: p.name,
+      type: p.type,
+      isLars: p.isLars,
+      totalScore: p.totalScore,
+      bestTurn: p.bestTurn,
+      roundsPlayed: p.roundScores.length,
+    })),
   };
-}
-
-function createNewGameState(config: StartGameConfig): GameState {
-  const players: Player[] = config.players.map((p, idx) => ({
-    id: `p-${idx}-${Date.now()}`,
-    name: p.name,
-    type: p.type,
-    isLars: p.isLars,
-    avatarColor: AVATAR_COLORS[idx % AVATAR_COLORS.length],
-    totalScore: 0,
-    isOnBoard: false,
-    consecutiveZeros: 0,
-    roundScores: [],
-    bestTurn: 0,
-  }));
-
-  const now = new Date().toISOString();
-  return {
-    id: `game-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    mode: config.mode,
-    aiDifficulty: config.aiDifficulty,
-    players,
-    turn: createFreshTurn(0, 1, players[0].name),
-    finalRoundTriggered: false,
-    finalRoundTriggeredByIndex: null,
-    winnerIndex: null,
-    startedAt: now,
-    updatedAt: now,
-  };
-}
-
-function applySelectionLock(turn: TurnState, selectedIds: Set<number>): {
-  nextTurn: TurnState;
-  isHotDice: boolean;
-  isDoubling: boolean;
-} {
-  const selectedDice = turn.dice.filter((d) => selectedIds.has(d.id));
-  const evalResult = evaluateSelection(
-    selectedDice.map((d) => d.value),
-    {
-      isFirstRollOfTurn: turn.isFirstRollOfTurn,
-      lockedCycleTriples: turn.lockedCycleTriples,
-    }
-  );
-
-  if (!evalResult.isValid || evalResult.score <= 0) {
-    return { nextTurn: turn, isHotDice: false, isDoubling: false };
-  }
-
-  const nextTriples: Partial<Record<DieValue, number>> = {
-    ...turn.lockedCycleTriples,
-  };
-  for (const [faceStr, added] of Object.entries(evalResult.extendedTripleCounts)) {
-    const f = Number(faceStr) as DieValue;
-    nextTriples[f] = (nextTriples[f] ?? 0) + (added ?? 0);
-  }
-  for (const [faceStr, cnt] of Object.entries(evalResult.newTripleCounts)) {
-    const f = Number(faceStr) as DieValue;
-    nextTriples[f] = cnt;
-  }
-
-  const batch: LockedBatch = {
-    id: `b-${turn.rollCountInTurn}-${Date.now()}`,
-    rollNumber: turn.rollCountInTurn,
-    diceValues: selectedDice.map((d) => d.value),
-    points: evalResult.score,
-    labels: evalResult.labels,
-    isDoubling: evalResult.isDoubling,
-  };
-
-  const nextDice: DieState[] = turn.dice.map((d) =>
-    selectedIds.has(d.id) ? { ...d, status: 'locked' } : d
-  );
-
-  const remainingAvailable = nextDice.filter((d) => d.status === 'available');
-  const isHotDice = remainingAvailable.length === 0;
-
-  const nextTurn: TurnState = {
-    ...turn,
-    turnScore: turn.turnScore + evalResult.score,
-    dice: nextDice,
-    lockedCycleTriples: nextTriples,
-    cycleLockedBatches: [...turn.cycleLockedBatches, batch],
-    allTurnBatches: [...turn.allTurnBatches, batch],
-    subPhase: isHotDice ? 'HOT_DICE_CHOICE' : 'AWAITING_ROLL',
-    statusMessage: isHotDice
-      ? 'Alle 6 terninger gav point! Kast alle 6 igen eller gem point.'
-      : `Låste +${evalResult.score.toLocaleString('da-DK')} pt — kast igen eller gem point`,
-  };
-
-  return { nextTurn, isHotDice, isDoubling: evalResult.isDoubling };
 }
 
 export default function App() {
+  const localClientId = useMemo(() => getOrCreateClientId(), []);
+  const urlRoomCode = useMemo(() => {
+    if (typeof window === 'undefined') return '';
+    const params = new URLSearchParams(window.location.search);
+    return (params.get('room') || '').replace(/\D/g, '').slice(0, 6);
+  }, []);
+
   const [theme, setTheme] = useState<ThemeMode>(() => loadTheme());
   const [isMuted, setIsMuted] = useState<boolean>(() => {
     const m = loadMuted();
@@ -170,8 +119,12 @@ export default function App() {
   const [savedGame, setSavedGame] = useState<GameState | null>(() => loadActiveGame());
   const [history, setHistory] = useState<CompletedGameRecord[]>(() => loadGameHistory());
   const [activeGame, setActiveGame] = useState<GameState | null>(null);
+  const [onlineRoom, setOnlineRoom] = useState<OnlineRoomSnapshot | null>(null);
   const [phase, setPhase] = useState<GamePhase>('TITLE');
   const [lastConfig, setLastConfig] = useState<StartGameConfig | null>(null);
+
+  const [isSocketConnected, setIsSocketConnected] = useState(false);
+  const [onlineError, setOnlineError] = useState<string | null>(null);
 
   const [rulesOpen, setRulesOpen] = useState(false);
   const [highscoreModal, setHighscoreModal] = useState<{
@@ -179,18 +132,148 @@ export default function App() {
     tab: 'highscores' | 'history';
   }>({ open: false, tab: 'highscores' });
 
+  const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const recordedGamesRef = useRef<Set<string>>(new Set());
+
+  const recordFinishedGame = useCallback((finished: GameState) => {
+    if (recordedGamesRef.current.has(finished.id)) return;
+    recordedGamesRef.current.add(finished.id);
+    const nextHistory = appendGameHistory(toCompletedRecord(finished));
+    setHistory(nextHistory);
+  }, []);
+
   // Sync theme to document root
   useEffect(() => {
     saveTheme(theme);
   }, [theme]);
 
-  // Persist active game whenever it updates
+  // Persist local (offline) active game whenever it updates
   useEffect(() => {
-    if (phase === 'PLAYING' && activeGame) {
+    if (phase === 'PLAYING' && activeGame && activeGame.mode !== 'online_multiplayer') {
       saveActiveGame(activeGame);
       setSavedGame(activeGame);
     }
   }, [activeGame, phase]);
+
+  // WebSocket connection for online phone-to-phone multiplayer
+  useEffect(() => {
+    let disposed = false;
+    let attempt = 0;
+
+    const connect = () => {
+      if (disposed) return;
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${proto}//${window.location.host}/ws`;
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        if (disposed) return;
+        attempt = 0;
+        setIsSocketConnected(true);
+
+        // Auto-rejoin an active online session if this phone refreshed/unlocked
+        const savedSession = loadSavedOnlineRoom();
+        if (savedSession && !urlRoomCode) {
+          ws.send(
+            JSON.stringify({
+              type: 'room:join',
+              clientId: localClientId,
+              roomCode: savedSession.roomCode,
+              playerName: savedSession.playerName,
+            })
+          );
+        }
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+
+          if (msg.type === 'room:error') {
+            setOnlineError(msg.message || 'Der opstod en fejl i rummet.');
+            // If auto-rejoin failed because room expired, clear saved room
+            const saved = loadSavedOnlineRoom();
+            if (saved && String(msg.message || '').includes('blev ikke fundet')) {
+              saveOnlineRoom(null);
+            }
+            return;
+          }
+
+          if (msg.type === 'room:left') {
+            saveOnlineRoom(null);
+            setOnlineRoom(null);
+            setActiveGame(null);
+            setPhase('TITLE');
+            return;
+          }
+
+          if (msg.type === 'room:state' && msg.room) {
+            const room = msg.room as OnlineRoomSnapshot;
+            setOnlineError(null);
+            setOnlineRoom(room);
+
+            const meInRoom = room.lobbyPlayers.find(
+              (p) => p.clientId === localClientId
+            );
+            if (meInRoom) {
+              saveOnlineRoom({ roomCode: room.roomCode, playerName: meInRoom.name });
+            }
+
+            if (msg.sound) {
+              playSoundCue(msg.sound as SoundCue);
+            }
+
+            if (room.status === 'LOBBY') {
+              setActiveGame(null);
+              setPhase('ONLINE_LOBBY');
+            } else if (room.status === 'PLAYING' && room.game) {
+              setActiveGame(room.game);
+              setPhase('PLAYING');
+            } else if (room.status === 'GAME_OVER' && room.game) {
+              setActiveGame(room.game);
+              setPhase('GAME_OVER');
+              recordFinishedGame(room.game);
+            }
+          }
+        } catch {
+          // ignore malformed frames
+        }
+      };
+
+      ws.onclose = () => {
+        if (disposed) return;
+        setIsSocketConnected(false);
+        const delay = Math.min(5000, 800 * Math.pow(1.4, attempt));
+        attempt += 1;
+        reconnectTimerRef.current = window.setTimeout(connect, delay);
+      };
+    };
+
+    connect();
+
+    return () => {
+      disposed = true;
+      if (reconnectTimerRef.current) {
+        window.clearTimeout(reconnectTimerRef.current);
+      }
+      wsRef.current?.close();
+    };
+  }, [localClientId, recordFinishedGame, urlRoomCode]);
+
+  const sendSocket = useCallback(
+    (payload: Record<string, unknown>) => {
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        setOnlineError('Ingen forbindelse til serveren endnu — prøv igen om et øjeblik.');
+        return false;
+      }
+      ws.send(JSON.stringify({ ...payload, clientId: localClientId }));
+      return true;
+    },
+    [localClientId]
+  );
 
   const handleToggleTheme = useCallback(() => {
     setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
@@ -205,181 +288,54 @@ export default function App() {
     });
   }, []);
 
-  const advanceOrFinishGame = useCallback(
-    (
-      updatedPlayers: Player[],
-      currentPlayerIndex: number,
-      currentRound: number,
-      finalRoundTriggered: boolean,
-      finalRoundTriggeredByIndex: number | null,
-      baseGame: GameState,
-      notice?: string
-    ) => {
-      const isLastPlayerInRound = currentPlayerIndex === updatedPlayers.length - 1;
-      const anyOverGoal = updatedPlayers.some((p) => p.totalScore >= 10000);
-
-      if (isLastPlayerInRound && (finalRoundTriggered || anyOverGoal)) {
-        // Determine winner (highest score)
-        let winnerIdx = 0;
-        for (let i = 1; i < updatedPlayers.length; i++) {
-          if (updatedPlayers[i].totalScore > updatedPlayers[winnerIdx].totalScore) {
-            winnerIdx = i;
-          }
-        }
-        const winner = updatedPlayers[winnerIdx];
-        const finishedGame: GameState = {
-          ...baseGame,
-          players: updatedPlayers,
-          finalRoundTriggered: true,
-          finalRoundTriggeredByIndex,
-          winnerIndex: winnerIdx,
-          updatedAt: new Date().toISOString(),
-        };
-
-        const record: CompletedGameRecord = {
-          id: finishedGame.id,
-          finishedAt: finishedGame.updatedAt,
-          mode: finishedGame.mode,
-          aiDifficulty: finishedGame.mode === 'vs_lars' ? finishedGame.aiDifficulty : undefined,
-          totalRounds: currentRound,
-          winnerName: winner.name,
-          winnerScore: winner.totalScore,
-          players: updatedPlayers.map((p) => ({
-            name: p.name,
-            type: p.type,
-            isLars: p.isLars,
-            totalScore: p.totalScore,
-            bestTurn: p.bestTurn,
-            roundsPlayed: p.roundScores.length,
-          })),
-        };
-
-        const nextHistory = appendGameHistory(record);
-        setHistory(nextHistory);
-        saveActiveGame(null);
-        setSavedGame(null);
-        setActiveGame(finishedGame);
-        setPhase('GAME_OVER');
-        soundEngine.playVictory();
-        return;
-      }
-
-      const nextIndex = isLastPlayerInRound ? 0 : currentPlayerIndex + 1;
-      const nextRound = isLastPlayerInRound ? currentRound + 1 : currentRound;
-      const nextPlayer = updatedPlayers[nextIndex];
-
-      const nextGame: GameState = {
-        ...baseGame,
-        players: updatedPlayers,
-        finalRoundTriggered,
-        finalRoundTriggeredByIndex,
-        turn: createFreshTurn(nextIndex, nextRound, nextPlayer.name, notice),
-        updatedAt: new Date().toISOString(),
-      };
-      setActiveGame(nextGame);
+  const handleCreateOnlineRoom = useCallback(
+    (playerName: string) => {
+      setOnlineError(null);
+      savePlayerName(playerName);
+      sendSocket({ type: 'room:create', playerName });
     },
-    []
+    [sendSocket]
   );
 
-  const finishTurnWithZero = useCallback(() => {
-    setActiveGame((prev) => {
-      if (!prev) return prev;
-      const idx = prev.turn.playerIndex;
-      const current = prev.players[idx];
-      const nextZeros = current.consecutiveZeros + 1;
-      const hitPenalty = nextZeros >= 3;
+  const handleJoinOnlineRoom = useCallback(
+    (roomCode: string, playerName: string) => {
+      setOnlineError(null);
+      savePlayerName(playerName);
+      sendSocket({ type: 'room:join', roomCode, playerName });
+    },
+    [sendSocket]
+  );
 
-      const updatedPlayer: Player = {
-        ...current,
-        totalScore: hitPenalty ? current.totalScore - 1000 : current.totalScore,
-        consecutiveZeros: hitPenalty ? 0 : nextZeros,
-        roundScores: [...current.roundScores, 0],
-      };
+  const handleUpdateOnlineConfig = useCallback(
+    (config: { includeLars?: boolean; aiDifficulty?: AIDifficulty }) => {
+      sendSocket({ type: 'room:config', ...config });
+    },
+    [sendSocket]
+  );
 
-      const updatedPlayers = prev.players.map((p, i) =>
-        i === idx ? updatedPlayer : p
-      );
+  const handleStartOnlineGame = useCallback(() => {
+    sendSocket({ type: 'room:start' });
+  }, [sendSocket]);
 
-      const nextIdx =
-        idx === updatedPlayers.length - 1 ? 0 : idx + 1;
-      const nextPlayer = updatedPlayers[nextIdx];
-      const notice = hitPenalty
-        ? `${current.name} fik 3 nul-ture i træk (-1.000 pt)! Nu er det ${nextPlayer.name}s tur.`
-        : undefined;
+  const handleLeaveOnlineRoom = useCallback(() => {
+    saveOnlineRoom(null);
+    if (typeof window !== 'undefined' && window.location.search.includes('room=')) {
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+    sendSocket({ type: 'room:leave' });
+    setOnlineRoom(null);
+    setActiveGame(null);
+    setPhase('TITLE');
+  }, [sendSocket]);
 
-      // Defer transition cleanly via state update logic
-      const isLastPlayerInRound = idx === updatedPlayers.length - 1;
-      const anyOverGoal = updatedPlayers.some((p) => p.totalScore >= 10000);
-
-      if (isLastPlayerInRound && (prev.finalRoundTriggered || anyOverGoal)) {
-        let winnerIdx = 0;
-        for (let i = 1; i < updatedPlayers.length; i++) {
-          if (updatedPlayers[i].totalScore > updatedPlayers[winnerIdx].totalScore) {
-            winnerIdx = i;
-          }
-        }
-        const winner = updatedPlayers[winnerIdx];
-        const finishedGame: GameState = {
-          ...prev,
-          players: updatedPlayers,
-          winnerIndex: winnerIdx,
-          updatedAt: new Date().toISOString(),
-        };
-        const record: CompletedGameRecord = {
-          id: finishedGame.id,
-          finishedAt: finishedGame.updatedAt,
-          mode: finishedGame.mode,
-          aiDifficulty: finishedGame.mode === 'vs_lars' ? finishedGame.aiDifficulty : undefined,
-          totalRounds: prev.turn.roundNumber,
-          winnerName: winner.name,
-          winnerScore: winner.totalScore,
-          players: updatedPlayers.map((p) => ({
-            name: p.name,
-            type: p.type,
-            isLars: p.isLars,
-            totalScore: p.totalScore,
-            bestTurn: p.bestTurn,
-            roundsPlayed: p.roundScores.length,
-          })),
-        };
-        setTimeout(() => {
-          const nextHistory = appendGameHistory(record);
-          setHistory(nextHistory);
-          saveActiveGame(null);
-          setSavedGame(null);
-          setPhase('GAME_OVER');
-          soundEngine.playVictory();
-        }, 0);
-        return finishedGame;
-      }
-
-      const nextRound = isLastPlayerInRound
-        ? prev.turn.roundNumber + 1
-        : prev.turn.roundNumber;
-
-      return {
-        ...prev,
-        players: updatedPlayers,
-        turn: createFreshTurn(nextIdx, nextRound, nextPlayer.name, notice),
-        updatedAt: new Date().toISOString(),
-      };
-    });
-  }, []);
-
-  // Auto-advance after FARKLE_PAUSE
-  useEffect(() => {
-    if (phase !== 'PLAYING' || !activeGame) return;
-    if (activeGame.turn.subPhase !== 'FARKLE_PAUSE') return;
-
-    const timer = window.setTimeout(() => {
-      finishTurnWithZero();
-    }, 1500);
-    return () => window.clearTimeout(timer);
-  }, [phase, activeGame?.turn.subPhase, activeGame?.turn.rollCountInTurn, finishTurnWithZero]);
-
+  // Local game start / resume
   const handleStartNewGame = useCallback((config: StartGameConfig) => {
     setLastConfig(config);
-    const fresh = createNewGameState(config);
+    const fresh = createGameFromPlayers({
+      mode: config.mode,
+      aiDifficulty: config.aiDifficulty,
+      players: config.players,
+    });
     setActiveGame(fresh);
     setPhase('PLAYING');
   }, []);
@@ -396,6 +352,11 @@ export default function App() {
   }, []);
 
   const handlePlayAgain = useCallback(() => {
+    if (activeGame?.mode === 'online_multiplayer') {
+      sendSocket({ type: 'room:start' });
+      return;
+    }
+
     if (lastConfig) {
       handleStartNewGame(lastConfig);
     } else if (activeGame) {
@@ -410,227 +371,119 @@ export default function App() {
       };
       handleStartNewGame(rebuilt);
     }
-  }, [lastConfig, activeGame, handleStartNewGame]);
+  }, [lastConfig, activeGame, handleStartNewGame, sendSocket]);
 
-  const handleToggleDie = useCallback((dieId: number) => {
-    setActiveGame((prev) => {
-      if (!prev || prev.turn.subPhase !== 'SELECTING_DICE') return prev;
-      const die = prev.turn.dice.find((d) => d.id === dieId);
-      if (!die || (die.status !== 'available' && die.status !== 'selected')) return prev;
-
-      const willSelect = die.status === 'available';
-      soundEngine.playSelect(willSelect);
-
-      const nextDice: DieState[] = prev.turn.dice.map((d) =>
-        d.id === dieId
-          ? { ...d, status: willSelect ? 'selected' : 'available' }
-          : d
-      );
-
-      return {
-        ...prev,
-        turn: {
-          ...prev.turn,
-          dice: nextDice,
-        },
-        updatedAt: new Date().toISOString(),
-      };
-    });
-  }, []);
-
-  const handleSelectBest = useCallback(() => {
-    setActiveGame((prev) => {
-      if (!prev || prev.turn.subPhase !== 'SELECTING_DICE') return prev;
-      const available = prev.turn.dice.filter(
-        (d) => d.status === 'available' || d.status === 'selected'
-      );
-      const best = findBestScoringSubset(
-        available.map((d) => ({ id: d.id, value: d.value })),
-        {
-          isFirstRollOfTurn: prev.turn.isFirstRollOfTurn,
-          lockedCycleTriples: prev.turn.lockedCycleTriples,
-        }
-      );
-      if (!best) return prev;
-      const bestIds = new Set(best.ids);
-      soundEngine.playSelect(true);
-
-      return {
-        ...prev,
-        turn: {
-          ...prev.turn,
-          dice: prev.turn.dice.map((d) =>
-            d.status === 'locked'
-              ? d
-              : { ...d, status: bestIds.has(d.id) ? 'selected' : 'available' }
-          ),
-        },
-        updatedAt: new Date().toISOString(),
-      };
-    });
-  }, []);
-
-  const handleLockSelected = useCallback(() => {
-    setActiveGame((prev) => {
-      if (!prev || prev.turn.subPhase !== 'SELECTING_DICE') return prev;
-      const selectedIds = new Set(
-        prev.turn.dice.filter((d) => d.status === 'selected').map((d) => d.id)
-      );
-      if (selectedIds.size === 0) return prev;
-
-      const { nextTurn, isDoubling } = applySelectionLock(prev.turn, selectedIds);
-      if (nextTurn === prev.turn) return prev;
-
-      soundEngine.playLock(isDoubling);
-      return {
-        ...prev,
-        turn: nextTurn,
-        updatedAt: new Date().toISOString(),
-      };
-    });
-  }, []);
-
-  const handleRoll = useCallback(() => {
-    setActiveGame((prev) => {
-      if (!prev) return prev;
-      let workingTurn = prev.turn;
-
-      // If player has valid dice selected during SELECTING_DICE, lock them first
-      if (workingTurn.subPhase === 'SELECTING_DICE') {
-        const selectedIds = new Set(
-          workingTurn.dice.filter((d) => d.status === 'selected').map((d) => d.id)
-        );
-        if (selectedIds.size === 0) return prev;
-        const locked = applySelectionLock(workingTurn, selectedIds);
-        if (locked.nextTurn === workingTurn) return prev;
-        workingTurn = locked.nextTurn;
-      }
-
-      const isHotDiceReset = workingTurn.subPhase === 'HOT_DICE_CHOICE';
-      const isInitialRoll = workingTurn.rollCountInTurn === 0;
-
-      if (
-        workingTurn.subPhase !== 'AWAITING_ROLL' &&
-        workingTurn.subPhase !== 'HOT_DICE_CHOICE'
-      ) {
-        return prev;
-      }
-
-      const nextRollCount = workingTurn.rollCountInTurn + 1;
-      const nextTriples = isHotDiceReset ? {} : workingTurn.lockedCycleTriples;
-      const nextCycleBatches = isHotDiceReset ? [] : workingTurn.cycleLockedBatches;
-
-      const rolledDice: DieState[] = workingTurn.dice.map((d) => {
-        if (isHotDiceReset || d.status === 'ready' || d.status === 'available') {
-          return {
-            ...d,
-            value: rollDieValue(),
-            status: 'available',
-            rollNonce: d.rollNonce + 1,
-          };
-        }
-        return d;
-      });
-
-      const availableForCheck = rolledDice
-        .filter((d) => d.status === 'available')
-        .map((d) => ({ id: d.id, value: d.value }));
-
-      const scoringIds = getScoringDieIds(availableForCheck, {
-        isFirstRollOfTurn: isInitialRoll,
-        lockedCycleTriples: nextTriples,
-      });
-
-      const isFarkle = scoringIds.size === 0;
-      if (isFarkle) {
-        soundEngine.playFarkle();
-      } else {
-        soundEngine.playRoll();
-      }
-
-      const activePlayer = prev.players[workingTurn.playerIndex];
-
-      return {
-        ...prev,
-        turn: {
-          ...workingTurn,
-          rollCountInTurn: nextRollCount,
-          isFirstRollOfTurn: isInitialRoll,
-          dice: rolledDice,
-          lockedCycleTriples: nextTriples,
-          cycleLockedBatches: nextCycleBatches,
-          subPhase: isFarkle ? 'FARKLE_PAUSE' : 'SELECTING_DICE',
-          statusMessage: isFarkle
-            ? `Nul-slag til ${activePlayer.name}! Ingen pointgivende terninger.`
-            : activePlayer.type === 'ai'
-              ? `${activePlayer.name} vurderer kastet...`
-              : 'Vælg én eller flere pointgivende terninger',
-        },
-        updatedAt: new Date().toISOString(),
-      };
-    });
-  }, []);
-
-  const handleBank = useCallback(() => {
-    if (!activeGame) return;
-    let workingTurn = activeGame.turn;
-
+  // Local Farkle auto-advance (online rooms run this on server)
+  useEffect(() => {
     if (
-      workingTurn.subPhase === 'FARKLE_PAUSE' ||
-      workingTurn.rollCountInTurn === 0
+      phase !== 'PLAYING' ||
+      !activeGame ||
+      activeGame.mode === 'online_multiplayer'
     ) {
       return;
     }
+    if (activeGame.turn.subPhase !== 'FARKLE_PAUSE') return;
 
-    // Auto-lock any valid selected dice before banking; must select >= 1 if in SELECTING_DICE
-    if (workingTurn.subPhase === 'SELECTING_DICE') {
-      const selectedIds = new Set(
-        workingTurn.dice.filter((d) => d.status === 'selected').map((d) => d.id)
-      );
-      if (selectedIds.size === 0) return;
-      const locked = applySelectionLock(workingTurn, selectedIds);
-      if (locked.nextTurn === workingTurn) return;
-      workingTurn = locked.nextTurn;
+    const timer = window.setTimeout(() => {
+      setActiveGame((prev) => {
+        if (!prev || prev.mode === 'online_multiplayer') return prev;
+        const res = performZeroTurn(prev);
+        if (res.sound) playSoundCue(res.sound);
+        if (res.gameOver) {
+          saveActiveGame(null);
+          setSavedGame(null);
+          recordFinishedGame(res.game);
+          setPhase('GAME_OVER');
+        }
+        return res.game;
+      });
+    }, 1500);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    phase,
+    activeGame?.mode,
+    activeGame?.turn.subPhase,
+    activeGame?.turn.rollCountInTurn,
+    recordFinishedGame,
+  ]);
+
+  // Game action handlers (route to WebSocket when online, or local state when offline)
+  const handleToggleDie = useCallback(
+    (dieId: number) => {
+      if (activeGame?.mode === 'online_multiplayer') {
+        sendSocket({ type: 'game:action', action: 'toggle_die', dieId });
+        return;
+      }
+      setActiveGame((prev) => {
+        if (!prev) return prev;
+        const res = performToggleDie(prev, dieId);
+        if (res.sound) playSoundCue(res.sound);
+        return res.game;
+      });
+    },
+    [activeGame?.mode, sendSocket]
+  );
+
+  const handleSelectBest = useCallback(() => {
+    if (activeGame?.mode === 'online_multiplayer') {
+      sendSocket({ type: 'game:action', action: 'select_best' });
+      return;
     }
+    setActiveGame((prev) => {
+      if (!prev) return prev;
+      const res = performSelectBest(prev);
+      if (res.sound) playSoundCue(res.sound);
+      return res.game;
+    });
+  }, [activeGame?.mode, sendSocket]);
 
-    const idx = workingTurn.playerIndex;
-    const player = activeGame.players[idx];
-    const minRequired = player.isOnBoard ? 350 : 1000;
+  const handleLockSelected = useCallback(() => {
+    if (activeGame?.mode === 'online_multiplayer') {
+      sendSocket({ type: 'game:action', action: 'lock_selected' });
+      return;
+    }
+    setActiveGame((prev) => {
+      if (!prev) return prev;
+      const res = performLockSelected(prev);
+      if (res.sound) playSoundCue(res.sound);
+      return res.game;
+    });
+  }, [activeGame?.mode, sendSocket]);
 
-    if (workingTurn.turnScore < minRequired) return;
+  const handleRoll = useCallback(() => {
+    if (activeGame?.mode === 'online_multiplayer') {
+      sendSocket({ type: 'game:action', action: 'roll' });
+      return;
+    }
+    setActiveGame((prev) => {
+      if (!prev) return prev;
+      const res = performRoll(prev);
+      if (res.sound) playSoundCue(res.sound);
+      return res.game;
+    });
+  }, [activeGame?.mode, sendSocket]);
 
-    const newTotal = player.totalScore + workingTurn.turnScore;
-    const updatedPlayer: Player = {
-      ...player,
-      totalScore: newTotal,
-      isOnBoard: true,
-      consecutiveZeros: 0,
-      roundScores: [...player.roundScores, workingTurn.turnScore],
-      bestTurn: Math.max(player.bestTurn, workingTurn.turnScore),
-    };
+  const handleBank = useCallback(() => {
+    if (activeGame?.mode === 'online_multiplayer') {
+      sendSocket({ type: 'game:action', action: 'bank' });
+      return;
+    }
+    setActiveGame((prev) => {
+      if (!prev) return prev;
+      const res = performBank(prev);
+      if (res.sound) playSoundCue(res.sound);
+      if (res.gameOver) {
+        saveActiveGame(null);
+        setSavedGame(null);
+        recordFinishedGame(res.game);
+        setPhase('GAME_OVER');
+      }
+      return res.game;
+    });
+  }, [activeGame?.mode, sendSocket, recordFinishedGame]);
 
-    const updatedPlayers = activeGame.players.map((p, i) =>
-      i === idx ? updatedPlayer : p
-    );
-
-    const triggeredNow = newTotal >= 10000;
-    const nextFinalTriggered = activeGame.finalRoundTriggered || triggeredNow;
-    const nextTriggeredBy =
-      activeGame.finalRoundTriggeredByIndex ?? (triggeredNow ? idx : null);
-
-    soundEngine.playBank();
-
-    advanceOrFinishGame(
-      updatedPlayers,
-      idx,
-      workingTurn.roundNumber,
-      nextFinalTriggered,
-      nextTriggeredBy,
-      activeGame
-    );
-  }, [activeGame, advanceOrFinishGame]);
-
-  // Lars AI turn orchestration
+  // Local Lars AI orchestration (online rooms run Lars AI on server)
   const aiTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -639,7 +492,14 @@ export default function App() {
       aiTimerRef.current = null;
     }
 
-    if (phase !== 'PLAYING' || !activeGame) return;
+    if (
+      phase !== 'PLAYING' ||
+      !activeGame ||
+      activeGame.mode === 'online_multiplayer'
+    ) {
+      return;
+    }
+
     const activePlayer = activeGame.players[activeGame.turn.playerIndex];
     if (activePlayer.type !== 'ai') return;
 
@@ -669,7 +529,6 @@ export default function App() {
       if (!decision) return;
 
       if (selected.length === 0) {
-        // Step 1: Select the dice visually and show Lars' thought
         aiTimerRef.current = window.setTimeout(() => {
           const chosenSet = new Set(decision.diceIdsToLock);
           soundEngine.playSelect(true);
@@ -688,7 +547,6 @@ export default function App() {
           });
         }, 650);
       } else {
-        // Step 2: Bank or Roll onwards
         aiTimerRef.current = window.setTimeout(() => {
           if (decision.shouldBankAfterLock) {
             handleBank();
@@ -705,14 +563,9 @@ export default function App() {
         aiTimerRef.current = null;
       }
     };
-  }, [
-    phase,
-    activeGame,
-    handleRoll,
-    handleBank,
-  ]);
+  }, [phase, activeGame, handleRoll, handleBank]);
 
-  // Keyboard shortcuts during active play (Space = Roll, Enter = Bank, Escape = Close Modals)
+  // Keyboard shortcuts during active play
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -729,7 +582,12 @@ export default function App() {
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
 
       const activePlayer = activeGame.players[activeGame.turn.playerIndex];
-      if (activePlayer.type !== 'human') return;
+      const isMyTurn =
+        activePlayer.type === 'human' &&
+        (activeGame.mode !== 'online_multiplayer' ||
+          activePlayer.clientId === localClientId);
+
+      if (!isMyTurn) return;
 
       if (e.code === 'Space') {
         e.preventDefault();
@@ -742,12 +600,28 @@ export default function App() {
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [phase, activeGame, rulesOpen, highscoreModal.open, handleRoll, handleBank]);
+  }, [
+    phase,
+    activeGame,
+    localClientId,
+    rulesOpen,
+    highscoreModal.open,
+    handleRoll,
+    handleBank,
+  ]);
 
   const handleClearHistory = useCallback(() => {
     clearGameHistory();
     setHistory([]);
   }, []);
+
+  const handleExitFromBoard = useCallback(() => {
+    if (activeGame?.mode === 'online_multiplayer') {
+      handleLeaveOnlineRoom();
+    } else {
+      setPhase('TITLE');
+    }
+  }, [activeGame?.mode, handleLeaveOnlineRoom]);
 
   return (
     <>
@@ -757,14 +631,32 @@ export default function App() {
           theme={theme}
           isMuted={isMuted}
           historyCount={history.length}
+          initialPlayerName={loadSavedPlayerName()}
+          initialRoomCode={urlRoomCode}
+          onlineError={onlineError}
+          isSocketConnected={isSocketConnected}
           onToggleTheme={handleToggleTheme}
           onToggleMute={handleToggleMute}
           onResumeGame={handleResumeGame}
           onDiscardSavedGame={handleDiscardSavedGame}
           onStartNewGame={handleStartNewGame}
+          onCreateOnlineRoom={handleCreateOnlineRoom}
+          onJoinOnlineRoom={handleJoinOnlineRoom}
           onOpenRules={() => setRulesOpen(true)}
           onOpenHighscores={() => setHighscoreModal({ open: true, tab: 'highscores' })}
           onOpenHistory={() => setHighscoreModal({ open: true, tab: 'history' })}
+        />
+      )}
+
+      {phase === 'ONLINE_LOBBY' && onlineRoom && (
+        <OnlineLobby
+          room={onlineRoom}
+          localClientId={localClientId}
+          isConnected={isSocketConnected}
+          errorMessage={onlineError}
+          onUpdateConfig={handleUpdateOnlineConfig}
+          onStartGame={handleStartOnlineGame}
+          onLeaveRoom={handleLeaveOnlineRoom}
         />
       )}
 
@@ -773,9 +665,11 @@ export default function App() {
           game={activeGame}
           theme={theme}
           isMuted={isMuted}
+          localClientId={localClientId}
+          isSocketConnected={isSocketConnected}
           onToggleTheme={handleToggleTheme}
           onToggleMute={handleToggleMute}
-          onExitToTitle={() => setPhase('TITLE')}
+          onExitToTitle={handleExitFromBoard}
           onOpenRules={() => setRulesOpen(true)}
           onOpenHighscores={() => setHighscoreModal({ open: true, tab: 'highscores' })}
           onRoll={handleRoll}
@@ -789,8 +683,12 @@ export default function App() {
       {phase === 'GAME_OVER' && activeGame && (
         <VictoryModal
           game={activeGame}
+          isOnlineHost={
+            activeGame.mode !== 'online_multiplayer' ||
+            onlineRoom?.hostClientId === localClientId
+          }
           onPlayAgain={handlePlayAgain}
-          onReturnToTitle={() => setPhase('TITLE')}
+          onReturnToTitle={handleExitFromBoard}
         />
       )}
 

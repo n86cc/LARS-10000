@@ -25,6 +25,8 @@ export type PlayerType = 'human' | 'ai';
 
 export interface Player {
   id: string;
+  clientId?: string;
+  connected?: boolean;
   name: string;
   type: PlayerType;
   isLars?: boolean;
@@ -60,12 +62,32 @@ export interface TurnState {
   statusMessage: string;
 }
 
-export type GameMode = 'vs_lars' | 'local_multiplayer';
+export type GameMode = 'vs_lars' | 'local_multiplayer' | 'online_multiplayer';
 
-export type GamePhase = 'TITLE' | 'PLAYING' | 'GAME_OVER';
+export type GamePhase = 'TITLE' | 'ONLINE_LOBBY' | 'PLAYING' | 'GAME_OVER';
+
+export interface OnlineLobbyPlayer {
+  clientId: string;
+  name: string;
+  connected: boolean;
+  isHost: boolean;
+}
+
+export interface OnlineRoomSnapshot {
+  roomCode: string;
+  hostClientId: string;
+  status: 'LOBBY' | 'PLAYING' | 'GAME_OVER';
+  aiDifficulty: AIDifficulty;
+  includeLars: boolean;
+  lobbyPlayers: OnlineLobbyPlayer[];
+  game: GameState | null;
+}
+
+export type SoundCue = 'roll' | 'select' | 'deselect' | 'lock' | 'doubling' | 'bank' | 'farkle' | 'victory';
 
 export interface GameState {
   id: string;
+  roomCode?: string;
   mode: GameMode;
   aiDifficulty: AIDifficulty;
   players: Player[];

@@ -4,13 +4,20 @@ import { PlayerAvatar } from './LarsAvatar';
 
 interface VictoryModalProps {
   game: GameState;
+  isOnlineHost?: boolean;
   onPlayAgain: () => void;
   onReturnToTitle: () => void;
 }
 
-export function VictoryModal({ game, onPlayAgain, onReturnToTitle }: VictoryModalProps) {
+export function VictoryModal({
+  game,
+  isOnlineHost = true,
+  onPlayAgain,
+  onReturnToTitle,
+}: VictoryModalProps) {
   const sorted = [...game.players].sort((a, b) => b.totalScore - a.totalScore);
   const winner = sorted[0];
+  const isOnline = game.mode === 'online_multiplayer';
 
   return (
     <div
@@ -70,20 +77,26 @@ export function VictoryModal({ game, onPlayAgain, onReturnToTitle }: VictoryModa
         </div>
 
         <div className="flex flex-col sm:flex-row gap-3 px-6 pb-6">
-          <button
-            type="button"
-            onClick={onPlayAgain}
-            className="flex-1 flex items-center justify-center gap-2 px-5 py-3 rounded-xl font-display font-bold text-sm bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-md transition-colors cursor-pointer"
-          >
-            <RotateCcw className="w-4 h-4" />
-            Spil igen
-          </button>
+          {!isOnline || isOnlineHost ? (
+            <button
+              type="button"
+              onClick={onPlayAgain}
+              className="flex-1 flex items-center justify-center gap-2 px-5 py-3 rounded-xl font-display font-bold text-sm bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-md transition-colors cursor-pointer"
+            >
+              <RotateCcw className="w-4 h-4" />
+              Spil igen
+            </button>
+          ) : (
+            <div className="flex-1 flex items-center justify-center px-4 py-3 rounded-xl text-xs font-medium text-slate-500 dark:text-sky-200/70 bg-slate-100 dark:bg-[#112e54]">
+              Venter på at værten starter nyt spil...
+            </div>
+          )}
           <button
             type="button"
             onClick={onReturnToTitle}
             className="flex-1 px-5 py-3 rounded-xl font-semibold text-sm bg-slate-100 hover:bg-slate-200 dark:bg-[#143763] dark:hover:bg-[#194378] text-slate-800 dark:text-white transition-colors cursor-pointer"
           >
-            Til startskærm
+            {isOnline ? 'Forlad rum' : 'Til startskærm'}
           </button>
         </div>
       </div>
