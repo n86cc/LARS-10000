@@ -1,0 +1,111 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-display: "Bricolage Grotesque", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+@layer base {
+  html {
+    font-family: var(--font-sans);
+  }
+
+  body {
+    margin: 0;
+    min-height: 100dvh;
+    background-color: #eef3f8;
+    color: #0f172a;
+    transition: background-color 200ms ease, color 200ms ease;
+  }
+
+  html.dark body {
+    background-color: #071930;
+    color: #f1f5f9;
+  }
+}
+
+/* Tactile geometric felt pattern inspired by classic blue dice board */
+.board-felt {
+  background-color: #e6eef6;
+  background-image:
+    radial-gradient(circle at 50% 35%, rgba(56, 189, 248, 0.12) 0%, transparent 62%),
+    repeating-linear-gradient(
+      45deg,
+      rgba(15, 52, 96, 0.035) 0px,
+      rgba(15, 52, 96, 0.035) 1px,
+      transparent 1px,
+      transparent 14px
+    ),
+    repeating-linear-gradient(
+      -45deg,
+      rgba(15, 52, 96, 0.035) 0px,
+      rgba(15, 52, 96, 0.035) 1px,
+      transparent 1px,
+      transparent 14px
+    );
+}
+
+html.dark .board-felt {
+  background-color: #092446;
+  background-image:
+    radial-gradient(circle at 50% 35%, rgba(56, 189, 248, 0.16) 0%, rgba(10, 46, 92, 0.4) 45%, rgba(5, 21, 43, 0.92) 100%),
+    repeating-linear-gradient(
+      45deg,
+      rgba(255, 255, 255, 0.028) 0px,
+      rgba(255, 255, 255, 0.028) 1px,
+      transparent 1px,
+      transparent 16px
+    ),
+    repeating-linear-gradient(
+      -45deg,
+      rgba(255, 255, 255, 0.028) 0px,
+      rgba(255, 255, 255, 0.028) 1px,
+      transparent 1px,
+      transparent 16px
+    );
+}
+
+@keyframes diceTumble {
+  0% {
+    transform: translateY(-18px) rotate(-18deg) scale(0.86);
+    opacity: 0.7;
+  }
+  45% {
+    transform: translateY(4px) rotate(11deg) scale(1.06);
+    opacity: 1;
+  }
+  75% {
+    transform: translateY(-3px) rotate(-4deg) scale(0.99);
+  }
+  100% {
+    transform: translateY(0) rotate(0deg) scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-dice-tumble {
+  animation: diceTumble 360ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes scoreAura {
+  0%, 100% {
+    box-shadow: 0 0 18px rgba(56, 189, 248, 0.55), 0 0 4px rgba(186, 230, 253, 0.8);
+  }
+  50% {
+    box-shadow: 0 0 28px rgba(56, 189, 248, 0.85), 0 0 8px rgba(224, 242, 254, 0.95);
+  }
+}
+
+.scoring-die-glow {
+  animation: scoreAura 2.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-dice-tumble,
+  .scoring-die-glow {
+    animation: none !important;
+  }
+}
+
