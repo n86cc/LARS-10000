@@ -101,7 +101,7 @@ function scheduleRoomAutomation(room: ServerRoom) {
       }
       broadcastRoom(room, res.sound);
       scheduleRoomAutomation(room);
-    }, 1500);
+    }, 900);
     return;
   }
 
@@ -114,7 +114,7 @@ function scheduleRoomAutomation(room: ServerRoom) {
         room.game = res.game;
         broadcastRoom(room, res.sound);
         scheduleRoomAutomation(room);
-      }, 650);
+      }, 320);
     } else if (turn.subPhase === 'SELECTING_DICE') {
       const selected = turn.dice.filter((d) => d.status === 'selected');
       const available = turn.dice.filter(
@@ -150,7 +150,7 @@ function scheduleRoomAutomation(room: ServerRoom) {
           };
           broadcastRoom(room, 'select');
           scheduleRoomAutomation(room);
-        }, 650);
+        }, 350);
       } else {
         room.timerId = setTimeout(() => {
           if (!room.game || room.status !== 'PLAYING') return;
@@ -167,7 +167,7 @@ function scheduleRoomAutomation(room: ServerRoom) {
             broadcastRoom(room, res.sound);
           }
           scheduleRoomAutomation(room);
-        }, 720);
+        }, 380);
       }
     }
   }

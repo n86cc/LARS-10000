@@ -246,17 +246,19 @@ export function findAllValidScoringSubsets(
   }
 ): Array<{ indices: number[]; ids: number[]; evalResult: ScoringEvaluation }> {
   const n = availableDice.length;
+  const totalMasks = 1 << n;
   const results: Array<{ indices: number[]; ids: number[]; evalResult: ScoringEvaluation }> = [];
 
-  for (let mask = 1; mask < 1 << n; mask++) {
+  for (let mask = 1; mask < totalMasks; mask++) {
     const indices: number[] = [];
     const ids: number[] = [];
     const values: DieValue[] = [];
     for (let i = 0; i < n; i++) {
       if (mask & (1 << i)) {
+        const die = availableDice[i];
         indices.push(i);
-        ids.push(availableDice[i].id);
-        values.push(availableDice[i].value);
+        ids.push(die.id);
+        values.push(die.value);
       }
     }
     const evalResult = evaluateSelection(values, options);
@@ -269,6 +271,49 @@ export function findAllValidScoringSubsets(
 }
 
 /**
+ * Single-pass analyzer returning all valid subsets, scoring die IDs, and the best subset.
+ */
+export function analyzeAvailableDice(
+  availableDice: Array<{ id: number; value: DieValue }>,
+  options: {
+    isFirstRollOfTurn: boolean;
+    lockedCycleTriples?: Partial<Record<DieValue, number>>;
+  }
+): {
+  scoringDieIds: Set<number>;
+  bestSubset: { ids: number[]; evalResult: ScoringEvaluation } | null;
+} {
+  const scoringDieIds = new Set<number>();
+  if (availableDice.length === 0) {
+    return { scoringDieIds, bestSubset: null };
+  }
+
+  const subsets = findAllValidScoringSubsets(availableDice, options);
+  if (subsets.length === 0) {
+    return { scoringDieIds, bestSubset: null };
+  }
+
+  let best = subsets[0];
+  for (let i = 0; i < subsets.length; i++) {
+    const sub = subsets[i];
+    for (let j = 0; j < sub.ids.length; j++) {
+      scoringDieIds.add(sub.ids[j]);
+    }
+    if (
+      sub.evalResult.score > best.evalResult.score ||
+      (sub.evalResult.score === best.evalResult.score && sub.ids.length > best.ids.length)
+    ) {
+      best = sub;
+    }
+  }
+
+  return {
+    scoringDieIds,
+    bestSubset: { ids: best.ids, evalResult: best.evalResult },
+  };
+}
+
+/**
  * Returns the IDs of all dice in `availableDice` that participate in at least one valid scoring move.
  */
 export function getScoringDieIds(
@@ -278,18 +323,11 @@ export function getScoringDieIds(
     lockedCycleTriples?: Partial<Record<DieValue, number>>;
   }
 ): Set<number> {
-  const scoringIds = new Set<number>();
-  const subsets = findAllValidScoringSubsets(availableDice, options);
-  for (const sub of subsets) {
-    for (const id of sub.ids) {
-      scoringIds.add(id);
-    }
-  }
-  return scoringIds;
+  return analyzeAvailableDice(availableDice, options).scoringDieIds;
 }
 
 /**
- * Returns the highest-scoring valid subset of dice (breaking ties by using more dice, or fewer if equal).
+ * Returns the highest-scoring valid subset of dice (breaking ties by using more dice).
  */
 export function findBestScoringSubset(
   availableDice: Array<{ id: number; value: DieValue }>,
@@ -298,17 +336,7 @@ export function findBestScoringSubset(
     lockedCycleTriples?: Partial<Record<DieValue, number>>;
   }
 ): { ids: number[]; evalResult: ScoringEvaluation } | null {
-  const subsets = findAllValidScoringSubsets(availableDice, options);
-  if (subsets.length === 0) return null;
-
-  subsets.sort((a, b) => {
-    if (b.evalResult.score !== a.evalResult.score) {
-      return b.evalResult.score - a.evalResult.score;
-    }
-    return b.ids.length - a.ids.length;
-  });
-
-  return { ids: subsets[0].ids, evalResult: subsets[0].evalResult };
+  return analyzeAvailableDice(availableDice, options).bestSubset;
 }
 
 export function rollDieValue(): DieValue {

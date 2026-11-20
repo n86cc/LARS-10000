@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Award, History, Trash2, X } from 'lucide-react';
 import type { CompletedGameRecord } from '../types/game';
 import { deriveHighscores } from '../storage/persistence';
@@ -28,9 +28,9 @@ export function HighscoreModal({
     }
   }, [isOpen, initialTab]);
 
-  if (!isOpen) return null;
+  const { topGames, playerStats } = useMemo(() => deriveHighscores(history), [history]);
 
-  const { topGames, playerStats } = deriveHighscores(history);
+  if (!isOpen) return null;
 
   const formatDate = (iso: string) => {
     try {

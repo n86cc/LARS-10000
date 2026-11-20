@@ -1,6 +1,8 @@
+import { memo } from 'react';
 import type { DieValue } from '../types/game';
 
 interface Die3DProps {
+  dieId?: number;
   value: DieValue;
   size?: 'sm' | 'md' | 'lg';
   isScoring?: boolean;
@@ -10,6 +12,8 @@ interface Die3DProps {
   rollNonce?: number;
   staggerIndex?: number;
   disabled?: boolean;
+  isInteractive?: boolean;
+  onSelect?: (dieId: number) => void;
   onClick?: () => void;
   ariaLabel?: string;
 }
@@ -48,7 +52,8 @@ const PIP_POSITIONS: Record<DieValue, Array<[number, number]>> = {
   ],
 };
 
-export function Die3D({
+export const Die3D = memo(function Die3D({
+  dieId,
   value,
   size = 'lg',
   isScoring = false,
@@ -58,6 +63,8 @@ export function Die3D({
   rollNonce = 0,
   staggerIndex = 0,
   disabled = false,
+  isInteractive = false,
+  onSelect,
   onClick,
   ariaLabel,
 }: Die3DProps) {
@@ -66,37 +73,31 @@ export function Die3D({
       ? 'w-9 h-9 rounded-lg'
       : size === 'md'
         ? 'w-14 h-14 sm:w-16 sm:h-16 rounded-xl'
-        : 'w-16 h-16 sm:w-20 sm:h-20 rounded-2xl';
+        : 'w-15 h-15 sm:w-20 sm:h-20 rounded-2xl';
 
   const pipRadius = size === 'sm' ? 8.5 : 8;
   const pips = PIP_POSITIONS[value];
 
   const baseSurface = isLocked
     ? 'bg-gradient-to-br from-slate-100 to-slate-200 dark:from-slate-200 dark:to-slate-300 border border-slate-300/90 shadow-sm'
-    : 'bg-gradient-to-br from-white via-slate-50 to-slate-200 border border-white/90 shadow-[0_8px_20px_rgba(2,12,27,0.35),inset_0_-3px_0_rgba(148,163,184,0.45)]';
+    : 'bg-gradient-to-br from-white via-slate-50 to-slate-200 border border-white/90 shadow-[0_8px_18px_rgba(2,12,27,0.32),inset_0_-3px_0_rgba(148,163,184,0.42)]';
 
   const stateClasses = isSelected
-    ? '-translate-y-2 scale-[1.04] ring-3 ring-amber-400 shadow-[0_14px_28px_rgba(245,158,11,0.38)]'
+    ? '-translate-y-2 scale-[1.04] ring-3 ring-amber-400 shadow-[0_12px_24px_rgba(245,158,11,0.38)]'
     : isScoring && !isLocked
       ? 'scoring-die-glow ring-2 ring-sky-300 dark:ring-sky-300/90 hover:-translate-y-1'
       : isDimmed
         ? 'opacity-65'
         : 'hover:-translate-y-0.5';
 
+  const canClick = Boolean((onSelect && dieId !== undefined) || onClick);
   const interactiveClasses =
-    onClick && !disabled
+    canClick && !disabled
       ? 'cursor-pointer active:scale-95 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-amber-400'
       : 'cursor-default';
 
   const content = (
     <svg viewBox="0 0 100 100" className="w-full h-full block" aria-hidden="true">
-      <defs>
-        <radialGradient id={`dieGloss-${size}`} cx="30%" cy="22%" r="70%">
-          <stop offset="0%" stopColor="rgba(255,255,255,0.85)" />
-          <stop offset="100%" stopColor="rgba(255,255,255,0)" />
-        </radialGradient>
-      </defs>
-      <rect x="3" y="3" width="94" height="94" rx="18" fill={`url(#dieGloss-${size})`} />
       {pips.map(([cx, cy], idx) => (
         <circle
           key={idx}
@@ -109,23 +110,30 @@ export function Die3D({
     </svg>
   );
 
-  const animationKey = `${rollNonce}-${value}`;
+  const handlePress = () => {
+    if (disabled) return;
+    if (onSelect && dieId !== undefined) {
+      onSelect(dieId);
+    } else if (onClick) {
+      onClick();
+    }
+  };
 
-  if (onClick) {
+  if (isInteractive || canClick) {
     return (
       <button
-        key={animationKey}
+        key={`${rollNonce}-${value}`}
         type="button"
-        onClick={onClick}
+        onClick={handlePress}
         disabled={disabled}
         aria-pressed={isSelected}
         aria-label={ariaLabel ?? `Terning ${value}${isSelected ? ' (valgt)' : ''}`}
         style={
           rollNonce > 0
-            ? { animationDelay: `${staggerIndex * 35}ms` }
+            ? { animationDelay: `${staggerIndex * 16}ms` }
             : undefined
         }
-        className={`relative select-none transition-transform duration-150 ease-out ${sizeClasses} ${baseSurface} ${stateClasses} ${interactiveClasses} ${
+        className={`relative select-none transition-transform duration-125 ease-out ${sizeClasses} ${baseSurface} ${stateClasses} ${interactiveClasses} ${
           rollNonce > 0 ? 'animate-dice-tumble' : ''
         }`}
       >
@@ -152,4 +160,4 @@ export function Die3D({
       {content}
     </div>
   );
-}
+});

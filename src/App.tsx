@@ -148,12 +148,16 @@ export default function App() {
     saveTheme(theme);
   }, [theme]);
 
-  // Persist local (offline) active game whenever it updates
+  // Persist local (offline) active game with short debounce so die taps stay instant
   useEffect(() => {
-    if (phase === 'PLAYING' && activeGame && activeGame.mode !== 'online_multiplayer') {
+    if (phase !== 'PLAYING' || !activeGame || activeGame.mode === 'online_multiplayer') {
+      return;
+    }
+    const timer = window.setTimeout(() => {
       saveActiveGame(activeGame);
       setSavedGame(activeGame);
-    }
+    }, 250);
+    return () => window.clearTimeout(timer);
   }, [activeGame, phase]);
 
   // WebSocket connection for online phone-to-phone multiplayer
@@ -397,7 +401,7 @@ export default function App() {
         }
         return res.game;
       });
-    }, 1500);
+    }, 900);
 
     return () => window.clearTimeout(timer);
   }, [
@@ -508,7 +512,7 @@ export default function App() {
     if (turn.subPhase === 'AWAITING_ROLL' || turn.subPhase === 'HOT_DICE_CHOICE') {
       aiTimerRef.current = window.setTimeout(() => {
         handleRoll();
-      }, 650);
+      }, 320);
     } else if (turn.subPhase === 'SELECTING_DICE') {
       const selected = turn.dice.filter((d) => d.status === 'selected');
       const available = turn.dice.filter(
@@ -545,7 +549,7 @@ export default function App() {
               },
             };
           });
-        }, 650);
+        }, 350);
       } else {
         aiTimerRef.current = window.setTimeout(() => {
           if (decision.shouldBankAfterLock) {
@@ -553,7 +557,7 @@ export default function App() {
           } else {
             handleRoll();
           }
-        }, 720);
+        }, 380);
       }
     }
 
@@ -619,9 +623,13 @@ export default function App() {
     if (activeGame?.mode === 'online_multiplayer') {
       handleLeaveOnlineRoom();
     } else {
+      if (activeGame && phase === 'PLAYING') {
+        saveActiveGame(activeGame);
+        setSavedGame(activeGame);
+      }
       setPhase('TITLE');
     }
-  }, [activeGame?.mode, handleLeaveOnlineRoom]);
+  }, [activeGame, phase, handleLeaveOnlineRoom]);
 
   return (
     <>
