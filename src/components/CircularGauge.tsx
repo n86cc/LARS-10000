@@ -1,24 +1,29 @@
+import { memo } from 'react';
+
 interface CircularGaugeProps {
   currentValue: number;
   targetValue: number;
   label: string;
 }
 
-export function CircularGauge({ currentValue, targetValue, label }: CircularGaugeProps) {
+const TICKS = Array.from({ length: 24 }, (_, i) => i * 15);
+
+export const CircularGauge = memo(function CircularGauge({
+  currentValue,
+  targetValue,
+  label,
+}: CircularGaugeProps) {
   const radius = 44;
   const circumference = 2 * Math.PI * radius;
   const ratio = Math.min(1, Math.max(0, currentValue / Math.max(1, targetValue)));
   const dashOffset = circumference * (1 - ratio);
   const reached = currentValue >= targetValue;
 
-  // 24 subtle radial tick marks around the dial like farkle.png
-  const ticks = Array.from({ length: 24 }, (_, i) => i * 15);
-
   return (
     <div className="relative flex flex-col items-center justify-center">
       <div className="relative w-28 h-28 flex items-center justify-center">
         <svg viewBox="0 0 112 112" className="w-full h-full -rotate-90" aria-hidden="true">
-          {ticks.map((deg) => (
+          {TICKS.map((deg) => (
             <line
               key={deg}
               x1="56"
@@ -69,4 +74,4 @@ export function CircularGauge({ currentValue, targetValue, label }: CircularGaug
       </span>
     </div>
   );
-}
+});

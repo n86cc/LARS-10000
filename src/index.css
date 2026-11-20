@@ -10,6 +10,11 @@
 @layer base {
   html {
     font-family: var(--font-sans);
+    touch-action: manipulation;
+  }
+
+  button {
+    touch-action: manipulation;
   }
 
   body {
@@ -69,42 +74,30 @@ html.dark .board-felt {
 
 @keyframes diceTumble {
   0% {
-    transform: translateY(-18px) rotate(-18deg) scale(0.86);
-    opacity: 0.7;
+    transform: translate3d(0, -14px, 0) rotate(-14deg) scale(0.88);
+    opacity: 0.75;
   }
-  45% {
-    transform: translateY(4px) rotate(11deg) scale(1.06);
+  55% {
+    transform: translate3d(0, 3px, 0) rotate(6deg) scale(1.04);
     opacity: 1;
   }
-  75% {
-    transform: translateY(-3px) rotate(-4deg) scale(0.99);
-  }
   100% {
-    transform: translateY(0) rotate(0deg) scale(1);
+    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
     opacity: 1;
   }
 }
 
 .animate-dice-tumble {
-  animation: diceTumble 360ms cubic-bezier(0.16, 1, 0.3, 1) both;
-}
-
-@keyframes scoreAura {
-  0%, 100% {
-    box-shadow: 0 0 18px rgba(56, 189, 248, 0.55), 0 0 4px rgba(186, 230, 253, 0.8);
-  }
-  50% {
-    box-shadow: 0 0 28px rgba(56, 189, 248, 0.85), 0 0 8px rgba(224, 242, 254, 0.95);
-  }
+  animation: diceTumble 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform, opacity;
 }
 
 .scoring-die-glow {
-  animation: scoreAura 2.2s ease-in-out infinite;
+  box-shadow: 0 0 18px rgba(56, 189, 248, 0.65), 0 0 5px rgba(186, 230, 253, 0.85);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .animate-dice-tumble,
-  .scoring-die-glow {
+  .animate-dice-tumble {
     animation: none !important;
   }
 }
